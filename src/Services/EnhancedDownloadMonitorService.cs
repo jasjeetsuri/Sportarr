@@ -475,6 +475,12 @@ public class EnhancedDownloadMonitorService : BackgroundService
         // Decypharr pauses torrents when complete since debrid services don't seed
         var isDecypharrCompleted = status.Status == "paused" && status.Progress >= 99.9;
 
+        if (download.Status == DownloadStatus.ImportWarning &&
+            status.Status is not ("failed" or "error"))
+        {
+            return;
+        }
+
         download.Status = status.Status switch
         {
             "downloading" => DownloadStatus.Downloading,
