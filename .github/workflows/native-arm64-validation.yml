@@ -2,7 +2,7 @@ name: Native ARM64 Validation
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, ci/native-arm64-validation]
   workflow_dispatch:
 
 permissions:
