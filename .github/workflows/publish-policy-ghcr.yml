@@ -1,0 +1,108 @@
+name: Publish Policy to GHCR
+
+on:
+  push:
+    branches: [feat/automatic-acquisition-policy]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-policy-ghcr
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/jasjeetsuri/sportarr
+
+jobs:
+  build:
+    if: github.repository == 'jasjeetsuri/Sportarr' && github.ref == 'refs/heads/feat/automatic-acquisition-policy'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            architecture: amd64
+            runtime: linux-x64
+          - runner: ubuntu-24.04-arm
+            architecture: arm64
+            runtime: linux-arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: 8.0.x
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+      - name: Test backend
+        run: dotnet test tests/Sportarr.Api.Tests/Sportarr.Api.Tests.csproj -c Release -p:SkipFrontendBuild=true --nologo
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm test -- --run src/components/__tests__/AcquisitionPolicyFields.test.tsx
+          npm run build
+      - name: Publish binaries
+        env:
+          RUNTIME: ${{ matrix.runtime }}
+        run: |
+          cp -R _output/UI/. src/wwwroot/
+          mkdir -p publish/docker-linux-x64 publish/docker-linux-arm64
+          dotnet publish src/Sportarr.csproj -c Release -r "$RUNTIME" --self-contained false -p:PublishSingleFile=false -p:SkipFrontendBuild=true -o "publish/docker-$RUNTIME"
+      - name: Build and smoke test native image
+        env:
+          ARCHITECTURE: ${{ matrix.architecture }}
+        run: |
+          case "$ARCHITECTURE" in
+            amd64) test "$(uname -m)" = x86_64 ;;
+            arm64) test "$(uname -m)" = aarch64 ;;
+            *) exit 1 ;;
+          esac
+          docker build --platform "linux/$ARCHITECTURE" \
+            --build-arg CACHEBUST="$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
+            --build-arg SPORTARR_BRANCH=feat/automatic-acquisition-policy \
+            --label org.opencontainers.image.source="https://github.com/$GITHUB_REPOSITORY" \
+            --label org.opencontainers.image.revision="$GITHUB_SHA" \
+            --tag "$IMAGE:sha-$GITHUB_SHA-$ARCHITECTURE" .
+          bash .github/scripts/smoke-container.sh "$IMAGE:sha-$GITHUB_SHA-$ARCHITECTURE" "$ARCHITECTURE"
+      - name: Push tested image
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ARCHITECTURE: ${{ matrix.architecture }}
+        run: |
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          docker push "$IMAGE:sha-$GITHUB_SHA-$ARCHITECTURE"
+      - name: Log out
+        if: always()
+        run: docker logout ghcr.io
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      packages: write
+    steps:
+      - name: Publish multi-platform tags
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          for tag in "sha-$GITHUB_SHA" acquisition-policy; do
+            docker manifest create "$IMAGE:$tag" "$IMAGE:sha-$GITHUB_SHA-amd64" "$IMAGE:sha-$GITHUB_SHA-arm64"
+            docker manifest push "$IMAGE:$tag"
+          done
+          docker manifest inspect "$IMAGE:sha-$GITHUB_SHA" | jq -e '[.manifests[].platform.architecture] | sort == ["amd64", "arm64"]'
+          printf 'Published `%s:sha-%s` and `%s:acquisition-policy` (AMD64 + ARM64).\n' "$IMAGE" "$GITHUB_SHA" "$IMAGE" >> "$GITHUB_STEP_SUMMARY"
+      - name: Log out
+        if: always()
+        run: docker logout ghcr.io
