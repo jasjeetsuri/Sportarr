@@ -173,7 +173,7 @@ public class DvrAutoSchedulerService : BackgroundService
 
             try
             {
-                var recording = await eventDvrService.ScheduleRecordingForEventAsync(evt.Id);
+                var recording = await eventDvrService.ScheduleRecordingForEventAsync(evt.Id, isAutomatic: true);
                 if (recording != null)
                 {
                     result.RecordingsScheduled++;
@@ -396,7 +396,7 @@ public class DvrAutoSchedulerService : BackgroundService
                     ScheduledEnd = matchingProgram.EndTime.AddMinutes(pad.PostRollMinutes),
                     PrePadding = pad.PrePadMinutes,
                     PostPadding = pad.PostRollMinutes
-                });
+                }, isAutomatic: true);
 
                 if (recording != null)
                 {
