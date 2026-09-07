@@ -2,6 +2,7 @@
 set -euo pipefail
 
 image=${1:?Usage: smoke-container.sh IMAGE}
+architecture=${2:-arm64}
 container="sportarr-smoke-${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}-$$"
 
 cleanup() {
@@ -18,7 +19,7 @@ wait_ready() {
         --max-time 5 http://localhost:1867/ping
 }
 
-test "$(docker image inspect --format '{{.Architecture}}' "$image")" = arm64
+test "$(docker image inspect --format '{{.Architecture}}' "$image")" = "$architecture"
 docker run --detach --name "$container" --network none --memory 2g --cpus 2 \
     --volume /config --tmpfs /tmp:rw,size=256m \
     --env PUID=13001 --env PGID=13001 "$image" >/dev/null
@@ -38,4 +39,4 @@ docker restart "$container" >/dev/null
 wait_ready
 docker exec "$container" test -f /config/smoke-persistence-check
 test "$(docker exec "$container" sqlite3 /config/sportarr.db 'PRAGMA integrity_check;')" = ok
-printf '\nARM64 application startup, UI, SQLite, and restart smoke checks passed.\n'
+printf '\n%s application startup, UI, SQLite, and restart smoke checks passed.\n' "$architecture"
