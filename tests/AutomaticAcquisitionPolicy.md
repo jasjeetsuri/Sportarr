@@ -61,9 +61,17 @@ npm --prefix frontend run build
 
 ## Promotion Gaps
 
+Native ARM64 run [34068796663](https://github.com/jasjeetsuri/Sportarr/actions/runs/34068796663)
+passed on code commit `0660fe047`: **1,932 passed, 0 failed, 0 skipped**.
+The independent image job passed frontend build, ARM64 publish, startup, UI
+assets, SQLite integrity, non-root process and restart persistence checks.
+Synthetic default-policy RSS workload (900 releases x 71 events): first 8.3778s,
+CPU 9.1700s, thread allocations 2,063,729,528 bytes; repeat 6.3287s, CPU 6.3600s,
+allocations 2,022,656,256 bytes. Both passes matched 270 expected events.
+These are cumulative allocations, not retained memory or a production guarantee.
+
 - PostgreSQL execution/upgrade is unverified: Docker Desktop stopped responding
   to container creation and `docker ps`. Model checks do not replace real DB tests.
-- Native ARM64 CI must pass on this branch, not just the earlier CI PR.
 - Live client, FFmpeg and provider integration/soak tests have not run. Refusal
   fixtures do not prove every eligible/manual success path or concurrent change.
   Transfer checks are not atomic with external I/O.
