@@ -1,4 +1,4 @@
-# RSS Matching Baseline
+# RSS Matching Benchmark and Regex Reuse
 
 `RssMatchingBenchmarkTests` calls the existing private `RssSyncService.FindMatchingEvent`
 method through a bound delegate. It exercises title parsing, per-event validation,
@@ -54,5 +54,60 @@ This is a selector workload, not the entire RSS sync: it excludes HTTP/feed pars
 database candidate queries, publication-age filtering, quality/upgrade decisions,
 pending releases, download submission, and production logging. The 900-by-71 shape
 matches the investigated workload size; the synthetic titles are not a production
-feed replay. These numbers do not establish individual method hotspots or predict
-ARM VPS timings. Capture managed CPU/allocation profiles before choosing an optimization.
+feed replay. These numbers alone do not establish individual method hotspots or
+predict ARM VPS timings.
+
+## Root Cause and Fix
+
+An observed RSS pass processed about 900 releases against 71 events in 128 seconds,
+with Sportarr peaking near 208% process CPU on a four-core host. This motivated the
+synthetic workload; it does not prove that all production CPU had the same cause.
+
+Managed profiling (`dotnet-trace` 8.0.547301, CPU sampling plus CLR allocation ticks,
+analyzed with TraceEvent 3.1.21) attributed 80.8% of CPU samples and 92.7% of sampled
+allocation bytes to three motorsport session methods in `EventPartDetector`.
+Stacks showed repeated regex parsing/construction. Those methods cycle through
+more fixed patterns than the framework's default 15-entry static regex cache holds.
+Attribution used the nearest Sportarr service frame; sampled allocation estimates
+are not exact per-method counters, and inclusive CPU percentages are not additive.
+
+The fix reuses regex instances in a private concurrent cache keyed by pattern,
+options and culture. Only the three motorsport methods change. Pattern text,
+matching order, options and fallback behavior stay the same; the global framework
+cache is untouched. Keys come from internal literals/tables, never release titles.
+This is not a cache of matching decisions or database state.
+
+## Before and After
+
+Same macOS x64 host/runtime, Release build, untraced 900-by-71 workload:
+
+| Metric | Baseline First | Optimized First | Baseline Repeat | Optimized Repeat |
+| --- | ---: | ---: | ---: | ---: |
+| Wall time | 62.451 s | 12.171 s | 57.991 s | 9.741 s |
+| Process CPU | 62.085 s | 12.930 s | 56.140 s | 9.548 s |
+| Thread allocated bytes | 28,332,635,688 | 2,067,482,920 | 28,279,910,752 | 2,025,720,032 |
+| Expected matches | 270 | 270 | 270 | 270 |
+
+Approximately 5-6x faster and 93% fewer cumulative allocated bytes in these single
+measurements, not statistical confidence intervals or a production guarantee.
+The follow-up trace reduced filename-session detector allocation attribution from
+38.7 GB to 46.6 MB across both passes. Traced timings are not used in the table.
+
+## Regression Evidence
+
+- The independent upstream branch passed all five benchmark/cache tests, including
+  en-US, tr-TR and fr-FR culture switches and warm-cache allocation checks after
+  unrelated framework-cache churn. Full-workload rerun: first 12.5772s, repeat
+  9.1930s, 270 expected matches each; allocations about 2.067/2.026 GB.
+- Earlier broad matching/parser/session regressions passed 507 tests. The local
+  full suite had 11 macOS filesystem failures, reproduced on the unoptimized base.
+  Timing-sensitive failures also occurred during combined/emulated runs; isolated
+  reruns passed. No thresholds or tests were disabled in this change.
+- A combined fork build containing the import fix and this optimization passed
+  [1,912 tests on native ARM64](https://github.com/jasjeetsuri/Sportarr/actions/runs/34064382419)
+  plus image startup/restart checks. That is supporting combined-build evidence,
+  not a native run of this standalone branch or a same-host speedup comparison.
+
+Run the cache regression with the command above, replacing the filter with
+`FullyQualifiedName~MotorsportRegexReuseTests`. No CI, deployment, scheduler,
+acquisition-policy, or unrelated parser changes are included.
